@@ -23,10 +23,14 @@ CLIENT_PUBLIC_KEY_PATH = os.path.join(
     "client_public.pem"
 )
 
-SERVER_IP = "127.0.0.1"   
+SERVER_IP = "127.0.0.1"
 SERVER_PORT = 12345
 
 def start_client():
+
+    server_ip = input(f"Enter server IP [{SERVER_IP}]: ").strip() or SERVER_IP
+    server_port_input = input(f"Enter server port [{SERVER_PORT}]: ").strip()
+    server_port = int(server_port_input) if server_port_input else SERVER_PORT
 
     # Generate client RSA keys if they don't exist
     if not os.path.exists(CLIENT_PRIVATE_KEY_PATH):
@@ -87,9 +91,9 @@ def start_client():
     # Create socket connection
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    client.connect((SERVER_IP, SERVER_PORT))
+    client.connect((server_ip, server_port))
 
-    print(f"Connected to server {SERVER_IP}:{SERVER_PORT}")
+    print(f"Connected to server {server_ip}:{server_port}")
 
     # Send client public key
     with open(CLIENT_PUBLIC_KEY_PATH, "rb") as f:
