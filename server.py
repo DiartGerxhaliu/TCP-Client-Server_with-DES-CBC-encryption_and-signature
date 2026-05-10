@@ -9,81 +9,117 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PUBLIC_KEY_PATH = os.path.join(CURRENT_DIR, "public.pem")
-CLIENT_PUBLIC_KEY_PATH = os.path.join(CURRENT_DIR, "client_public.pem")
 
-private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+# Generate RSA keys for server
+private_key = rsa.generate_private_key(
+    public_exponent=65537,
+    key_size=2048
+)
+
 public_key = private_key.public_key()
 
+# Save public key
 with open(PUBLIC_KEY_PATH, "wb") as f:
-    f.write(public_key.public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo
-    ))
+    f.write(
+        public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+    )
+
+def recv_exact(conn, size):
+    data = b''
+
+    while len(data) < size:
+        packet = conn.recv(size - len(data))
+
+        if not packet:
+            return None
+
+        data += packet
+
+    return data
 
 def start_server():
+
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind(('localhost', 12345))
+
+    # Allow wireless/LAN connections
+    server.bind(('0.0.0.0', 12345))
+
     server.listen(1)
-    print("Server waiting for communication...")
+
+    hostname = socket.gethostname()
+    server_ip = socket.gethostbyname(hostname)
+
+    print(f"\nServer running on IP: {server_ip}")
+    print("Waiting for client connection...\n")
 
     conn, addr = server.accept()
-    print(f"Client connected from {addr}")
 
-    client_pub_key_size = int.from_bytes(conn.recv(4), byteorder='big')
-    client_pub_key_bytes = b''
-    while len(client_pub_key_bytes) < client_pub_key_size:
-        chunk = conn.recv(min(1024, client_pub_key_size - len(client_pub_key_bytes)))
-        if not chunk:
-            break
-        client_pub_key_bytes += chunk
+    print(f"Client connected from: {addr}")
 
-    client_public_key = serialization.load_pem_public_key(client_pub_key_bytes)
-    print("Client public key received for signature verification.")
+    # Receive client public key
+    client_pub_key_size = int.from_bytes(
+        recv_exact(conn, 4),
+        byteorder='big'
+    )
 
-    enc_des_key = conn.recv(256)
+    client_pub_key_bytes = recv_exact(conn, client_pub_key_size)
 
+    client_public_key = serialization.load_pem_public_key(
+        client_pub_key_bytes
+    )
+
+    print("Client public key received.")
+
+    # Receive encrypted DES key
+    enc_des_key = recv_exact(conn, 256)
+
+    # Decrypt DES key using server private RSA key
     des_key = private_key.decrypt(
         enc_des_key,
         padding.OAEP(
-            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            mgf=padding.MGF1(
+                algorithm=hashes.SHA256()
+            ),
             algorithm=hashes.SHA256(),
             label=None
         )
     )
-    print("DES key established securely.")
+
+    print("DES secret key established securely.\n")
 
     while True:
-        iv = conn.recv(8)
+
+        iv = recv_exact(conn, 8)
+
         if not iv:
             break
 
-        msg_len_bytes = conn.recv(4)
-        if not msg_len_bytes:
-            break
+        msg_len = int.from_bytes(
+            recv_exact(conn, 4),
+            byteorder='big'
+        )
 
-        msg_len = int.from_bytes(msg_len_bytes, byteorder='big')
+        ciphertext = recv_exact(conn, msg_len)
 
-        ciphertext = b''
-        while len(ciphertext) < msg_len:
-            chunk = conn.recv(min(1024, msg_len - len(ciphertext)))
-            if not chunk:
-                break
-            ciphertext += chunk
+        sig_len = int.from_bytes(
+            recv_exact(conn, 4),
+            byteorder='big'
+        )
 
-        sig_len_bytes = conn.recv(4)
-        sig_len = int.from_bytes(sig_len_bytes, byteorder='big')
+        signature = recv_exact(conn, sig_len)
 
-        signature = b''
-        while len(signature) < sig_len:
-            chunk = conn.recv(min(1024, sig_len - len(signature)))
-            if not chunk:
-                break
-            signature += chunk
+        print(f"\nEncrypted Message (HEX):")
+        print(ciphertext.hex())
 
-        # Show signature
-        print(f"Signature (hex): {signature.hex()}")
+        print(f"\nSignature (HEX):")
+        print(signature.hex())
 
+        # Verify signature
         try:
+
             client_public_key.verify(
                 signature,
                 ciphertext,
@@ -93,22 +129,33 @@ def start_server():
                 ),
                 hashes.SHA256()
             )
-            print("Signature verified successfully.")
+
+            print("\nSignature VERIFIED.")
+
         except Exception as e:
-            print(f"Signature verification failed: {e}")
+
+            print(f"\nSignature verification FAILED: {e}")
             continue
 
-        # Show encrypted message
-        print(f"Encrypted message (hex): {ciphertext.hex()}")
+        # DES-CBC Decryption
+        cipher_des = DES.new(
+            des_key,
+            DES.MODE_CBC,
+            iv
+        )
 
-        # Decrypt message with DES-CBC
-        cipher_des = DES.new(des_key, DES.MODE_CBC, iv)
-        decrypted_msg = unpad(cipher_des.decrypt(ciphertext), DES.block_size)
+        decrypted_message = unpad(
+            cipher_des.decrypt(ciphertext),
+            DES.block_size
+        )
 
-        print(f"Decrypted message: {decrypted_msg.decode('utf-8')}")
+        print("\nDecrypted Message:")
+        print(decrypted_message.decode('utf-8'))
 
-    print("Connection closed.")
+    print("\nConnection closed.")
+
     conn.close()
+    server.close()
 
 if __name__ == "__main__":
     start_server()
